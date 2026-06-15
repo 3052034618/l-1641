@@ -28,33 +28,34 @@ router.post('/auth/register', authenticate, authorizeRoles.manager, authControll
 router.get('/auth/me', authenticate, authController.getCurrentUser);
 
 router.get('/users', authenticate, authorizeRoles.manager, userController.getUsers);
+router.get('/users/role/:role', authenticate, authorizeRoles.manager, userController.getUsersByRole);
+router.post('/users', authenticate, authorizeRoles.manager, userController.createUser);
 router.get('/users/:id', authenticate, userController.getUserById);
 router.put('/users/:id', authenticate, authorizeRoles.manager, userController.updateUser);
 router.delete('/users/:id', authenticate, authorizeRoles.manager, userController.deleteUser);
-router.get('/users/role/:role', authenticate, authorizeRoles.manager, userController.getUsersByRole);
 
 router.get('/departments', authenticate, departmentController.getDepartments);
-router.get('/departments/:id', authenticate, departmentController.getDepartmentById);
+router.get('/departments/zone/:zone', authenticate, departmentController.getDepartmentsByZone);
 router.post('/departments', authenticate, authorizeRoles.manager, departmentController.createDepartment);
+router.get('/departments/:id', authenticate, departmentController.getDepartmentById);
 router.put('/departments/:id', authenticate, authorizeRoles.manager, departmentController.updateDepartment);
 router.delete('/departments/:id', authenticate, authorizeRoles.manager, departmentController.deleteDepartment);
-router.get('/departments/zone/:zone', authenticate, departmentController.getDepartmentsByZone);
 
 router.get('/equipment', authenticate, equipmentController.getEquipments);
-router.get('/equipment/:id', authenticate, equipmentController.getEquipmentById);
-router.post('/equipment', authenticate, authorizeRoles.manager, equipmentController.createEquipment);
-router.put('/equipment/:id', authenticate, authorizeRoles.manager, equipmentController.updateEquipment);
-router.delete('/equipment/:id', authenticate, authorizeRoles.manager, equipmentController.deleteEquipment);
 router.get('/equipment/type/:type', authenticate, equipmentController.getEquipmentsByType);
 router.get('/equipment/stats', authenticate, equipmentController.getEquipmentStats);
+router.post('/equipment', authenticate, authorizeRoles.manager, equipmentController.createEquipment);
+router.get('/equipment/:id', authenticate, equipmentController.getEquipmentById);
+router.put('/equipment/:id', authenticate, authorizeRoles.manager, equipmentController.updateEquipment);
+router.delete('/equipment/:id', authenticate, authorizeRoles.manager, equipmentController.deleteEquipment);
 
 router.post('/recovery/packages', authenticate, authorizeRoles.disinfection, recoveryController.createPackage);
 router.post('/recovery/scan', authenticate, authorizeRoles.disinfection, recoveryController.scanBarcode);
 router.post('/recovery/inspect', authenticate, authorizeRoles.disinfection, recoveryController.inspectAndRecover);
 router.post('/recovery/reject', authenticate, authorizeRoles.disinfection, recoveryController.rejectPackage);
 router.get('/recovery/packages', authenticate, recoveryController.getPackages);
-router.get('/recovery/packages/:id', authenticate, recoveryController.getPackageById);
 router.get('/recovery/packages/barcode/:barcode', authenticate, recoveryController.getPackageByBarcode);
+router.get('/recovery/packages/:id', authenticate, recoveryController.getPackageById);
 router.get('/recovery/records', authenticate, recoveryController.getRecoveryRecords);
 router.get('/recovery/records/:id', authenticate, recoveryController.getRecoveryRecordById);
 router.put('/recovery/packages/:id', authenticate, authorizeRoles.disinfection, recoveryController.updatePackage);
@@ -90,11 +91,11 @@ router.post('/sterilization/data', authenticate, authorizeRoles.disinfection, st
 router.post('/sterilization/batches/complete', authenticate, authorizeRoles.disinfection, sterilizationController.completeBatch);
 router.post('/sterilization/batches/reinspect', authenticate, authorizeRoles.manager, sterilizationController.reinspectBatch);
 router.post('/sterilization/batches/unlock', authenticate, authorizeRoles.manager, sterilizationController.unlockBatch);
-router.get('/sterilization/batches/:id', authenticate, sterilizationController.getBatchById);
 router.get('/sterilization/batches', authenticate, sterilizationController.getBatches);
-router.get('/sterilization/batches/:batchId/records', authenticate, sterilizationController.getBatchRecords);
 router.get('/sterilization/stats', authenticate, sterilizationController.getBatchStats);
 router.get('/sterilization/realtime', authenticate, sterilizationController.getRealTimeStatus);
+router.get('/sterilization/batches/:id', authenticate, sterilizationController.getBatchById);
+router.get('/sterilization/batches/:batchId/records', authenticate, sterilizationController.getBatchRecords);
 
 router.post('/distribution/verify', authenticate, authorizeRoles.nurse, distributionController.verifyPackage);
 router.get('/distribution/verify/barcode/:barcode', authenticate, authorizeRoles.nurse, distributionController.verifyPackageByBarcode);
@@ -102,13 +103,13 @@ router.post('/distribution', authenticate, authorizeRoles.nurse, distributionCon
 router.post('/distribution/scan-tag', authenticate, authorizeRoles.nurse, distributionController.scanTag);
 router.post('/distribution/confirm', authenticate, authorizeRoles.nurse, distributionController.confirmReceipt);
 router.post('/distribution/check-expired', authenticate, authorizeRoles.manager, reportController.checkExpiredPackages);
-router.get('/distribution/:id', authenticate, distributionController.getDistributionById);
 router.get('/distribution', authenticate, distributionController.getDistributions);
-router.put('/distribution/:id', authenticate, authorizeRoles.nurse, distributionController.updateDistribution);
-router.get('/distribution/tags/:id', authenticate, distributionController.getTagById);
 router.get('/distribution/tags', authenticate, distributionController.getTags);
 router.get('/distribution/stats', authenticate, distributionController.getStats);
 router.get('/distribution/ready', authenticate, distributionController.getReadyPackages);
+router.get('/distribution/tags/:id', authenticate, distributionController.getTagById);
+router.get('/distribution/:id', authenticate, distributionController.getDistributionById);
+router.put('/distribution/:id', authenticate, authorizeRoles.nurse, distributionController.updateDistribution);
 
 router.post('/reports', authenticate, authorizeRoles.manager, reportController.generateReport);
 router.get('/reports/stats', authenticate, reportController.getStats);

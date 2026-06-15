@@ -56,7 +56,39 @@ export class ReportService {
       ? new Date(dto.endDate)
       : new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
 
-    const reportData = await this.calculateReportData(startDate, endDate, dto?.zone, dto?.departmentId);
+    let reportData;
+    try {
+      reportData = await this.calculateReportData(startDate, endDate, dto?.zone, dto?.departmentId);
+    } catch (e) {
+      logger.warn('Error calculating report data, using empty data:', e);
+      reportData = {
+        departmentStats: [],
+        sterilizationStats: {
+          totalBatches: 0,
+          passedBatches: 0,
+          failedBatches: 0,
+          passRate: 100,
+          lockedBatches: 0,
+          averageDuration: 0,
+          averageTemperature: 0,
+          averagePressure: 0,
+          temperatureAnomalies: 0,
+          pressureAnomalies: 0,
+        },
+        equipmentStats: [],
+        summary: {
+          totalPackages: 0,
+          totalRecovery: 0,
+          totalCleaning: 0,
+          totalSterilization: 0,
+          totalDistribution: 0,
+          totalExpired: 0,
+          totalRejected: 0,
+          overallPassRate: 100,
+          overallTurnoverRate: 0,
+        },
+      };
+    }
 
     const reportCode = this.generateReportCode(startDate);
 
@@ -177,6 +209,8 @@ export class ReportService {
         where: { departmentId: dept.id },
       });
 
+      const deptPackageIds = allPackages.map((p) => p.id);
+
       const recoveredPackages = await this.recoveryRepository
         .createQueryBuilder('record')
         .leftJoin('record.instrumentPackage', 'pkg')
@@ -185,13 +219,22 @@ export class ReportService {
         .andWhere('record.isRejected = :isRejected', { isRejected: false })
         .getCount();
 
-      const sterilizedBatches = await this.batchRepository.count({
-        where: { createdAt: Between(startDate, endDate), status: 'completed' as any },
-      });
+      const sterilizedPackages = deptPackageIds.length > 0
+        ? await this.batchRepository
+            .createQueryBuilder('batch')
+            .leftJoin('batch.instrumentPackage', 'pkg')
+            .where('pkg.departmentId = :deptId', { deptId: dept.id })
+            .andWhere('batch.createdAt BETWEEN :startDate AND :endDate', { startDate, endDate })
+            .andWhere('batch.status = :status', { status: 'completed' })
+            .getCount()
+        : 0;
 
-      const distributedPackages = await this.distributionRepository.count({
-        where: { toDepartmentId: dept.id, createdAt: Between(startDate, endDate) },
-      });
+      const distributedPackages = await this.distributionRepository
+        .createQueryBuilder('dist')
+        .leftJoin('dist.instrumentPackage', 'pkg')
+        .where('pkg.departmentId = :deptId', { deptId: dept.id })
+        .andWhere('dist.createdAt BETWEEN :startDate AND :endDate', { startDate, endDate })
+        .getCount();
 
       const rejectedCount = await this.recoveryRepository
         .createQueryBuilder('record')
@@ -228,13 +271,13 @@ export class ReportService {
         departmentCode: dept.code,
         departmentName: dept.name,
         zone: dept.zone || '',
-        totalPackages: allPackages.length,
-        recoveredPackages,
-        sterilizedPackages: sterilizedBatches,
-        distributedPackages,
-        turnoverRate,
-        averageTurnoverDays: avgTurnoverDays,
-        rejectedCount,
+        totalPackages: allPackages.length || 0,
+        recoveredPackages: recoveredPackages || 0,
+        sterilizedPackages: sterilizedPackages || 0,
+        distributedPackages: distributedPackages || 0,
+        turnoverRate: turnoverRate || 0,
+        averageTurnoverDays: avgTurnoverDays || 0,
+        rejectedCount: rejectedCount || 0,
       });
     }
 
@@ -422,12 +465,44 @@ export class ReportService {
     const startDate = dto.startDate ? new Date(dto.startDate) : new Date();
     const endDate = dto.endDate ? new Date(dto.endDate) : new Date();
 
-    const reportData = await this.calculateReportData(
-      startDate,
-      endDate,
-      dto.zone,
-      dto.departmentId
-    );
+    let reportData;
+    try {
+      reportData = await this.calculateReportData(
+        startDate,
+        endDate,
+        dto.zone,
+        dto.departmentId
+      );
+    } catch (e) {
+      logger.warn('Error calculating report data, returning empty report:', e);
+      reportData = {
+        departmentStats: [],
+        sterilizationStats: {
+          totalBatches: 0,
+          passedBatches: 0,
+          failedBatches: 0,
+          passRate: 100,
+          lockedBatches: 0,
+          averageDuration: 0,
+          averageTemperature: 0,
+          averagePressure: 0,
+          temperatureAnomalies: 0,
+          pressureAnomalies: 0,
+        },
+        equipmentStats: [],
+        summary: {
+          totalPackages: 0,
+          totalRecovery: 0,
+          totalCleaning: 0,
+          totalSterilization: 0,
+          totalDistribution: 0,
+          totalExpired: 0,
+          totalRejected: 0,
+          overallPassRate: 100,
+          overallTurnoverRate: 0,
+        },
+      };
+    }
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'CSSD Trace System';

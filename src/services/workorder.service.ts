@@ -116,8 +116,11 @@ export class WorkOrderService {
     }
 
     const scoredEngineers = candidateEngineers.map((engineer) => {
-      const openOrders = engineer.assignedWorkOrders.filter(
-        (wo) => wo.status === WorkOrderStatus.OPEN || wo.status === WorkOrderStatus.ASSIGNED
+      const activeWorkOrders = engineer.assignedWorkOrders.filter(
+        (wo) =>
+          wo.status === WorkOrderStatus.OPEN ||
+          wo.status === WorkOrderStatus.ASSIGNED ||
+          wo.status === WorkOrderStatus.IN_PROGRESS
       ).length;
 
       const hasSpecialization = equipmentType
@@ -126,7 +129,8 @@ export class WorkOrderService {
 
       return {
         engineer,
-        score: (hasSpecialization ? 1000 : 0) - openOrders,
+        activeWorkOrders,
+        score: (hasSpecialization ? 10000 : 0) - activeWorkOrders,
       };
     });
 
