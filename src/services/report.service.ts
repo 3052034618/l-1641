@@ -123,34 +123,51 @@ export class ReportService {
     zone?: string,
     departmentId?: string
   ) {
+    let scopeDepartmentIds: string[] = [];
+    try {
+      let departments = await this.departmentRepository.find({
+        where: { isActive: true },
+        select: ['id', 'zone'],
+      });
+      if (zone) {
+        departments = departments.filter((d) => d.zone === zone);
+      }
+      if (departmentId) {
+        departments = departments.filter((d) => d.id === departmentId);
+      }
+      scopeDepartmentIds = departments.map((d) => d.id);
+    } catch (e) {
+      logger.warn('Failed to get scope departments:', e);
+    }
+
     const departmentStats = await this.calculateDepartmentStats(startDate, endDate, zone, departmentId);
-    const sterilizationStats = await this.calculateSterilizationStats(startDate, endDate);
-    const equipmentStats = await this.calculateEquipmentStats(startDate, endDate);
+    const sterilizationStats = await this.calculateSterilizationStats(startDate, endDate, scopeDepartmentIds);
+    const equipmentStats = await this.calculateEquipmentStats(startDate, endDate, scopeDepartmentIds);
 
     const totalPackages = departmentStats.reduce((sum, d) => sum + (d.totalPackages || 0), 0);
     const totalRecovery = departmentStats.reduce((sum, d) => sum + (d.recoveredPackages || 0), 0);
     const totalSterilization = departmentStats.reduce((sum, d) => sum + (d.sterilizedPackages || 0), 0);
     const totalDistribution = departmentStats.reduce((sum, d) => sum + (d.distributedPackages || 0), 0);
+    const totalRejected = departmentStats.reduce((sum, d) => sum + (d.rejectedCount || 0), 0);
     const overallTurnoverRate = departmentStats.length > 0
       ? departmentStats.reduce((sum, d) => sum + (d.turnoverRate || 0), 0) / departmentStats.length
       : 0;
 
     let totalExpired = 0;
     try {
-      totalExpired = await this.packageRepository.count({
-        where: { status: PackageStatus.EXPIRED },
-      });
+      if (scopeDepartmentIds.length > 0) {
+        totalExpired = await this.packageRepository
+          .createQueryBuilder('pkg')
+          .where('pkg.status = :status', { status: PackageStatus.EXPIRED })
+          .andWhere('pkg.departmentId IN (:...ids)', { ids: scopeDepartmentIds })
+          .getCount();
+      } else {
+        totalExpired = await this.packageRepository.count({
+          where: { status: PackageStatus.EXPIRED },
+        });
+      }
     } catch (e) {
       logger.warn('Failed to count expired packages:', e);
-    }
-
-    let totalRejected = 0;
-    try {
-      totalRejected = await this.recoveryRepository.count({
-        where: { isRejected: true, createdAt: Between(startDate, endDate) },
-      });
-    } catch (e) {
-      logger.warn('Failed to count rejected records:', e);
     }
 
     const summary = {
@@ -284,11 +301,18 @@ export class ReportService {
     return stats;
   }
 
-  private async calculateSterilizationStats(startDate: Date, endDate: Date) {
-    const batches = await this.batchRepository.find({
-      where: { createdAt: Between(startDate, endDate) },
-      relations: ['records'],
-    });
+  private async calculateSterilizationStats(startDate: Date, endDate: Date, scopeDepartmentIds?: string[]) {
+    const queryBuilder = this.batchRepository
+      .createQueryBuilder('batch')
+      .leftJoinAndSelect('batch.instrumentPackage', 'pkg')
+      .leftJoinAndSelect('batch.records', 'records')
+      .where('batch.createdAt BETWEEN :startDate AND :endDate', { startDate, endDate });
+
+    if (scopeDepartmentIds && scopeDepartmentIds.length > 0) {
+      queryBuilder.andWhere('pkg.departmentId IN (:...ids)', { ids: scopeDepartmentIds });
+    }
+
+    const batches = await queryBuilder.getMany();
 
     const totalBatches = batches.length;
     const passedBatches = batches.filter((b) => b.status === 'completed').length;
@@ -361,7 +385,7 @@ export class ReportService {
     };
   }
 
-  private async calculateEquipmentStats(startDate: Date, endDate: Date) {
+  private async calculateEquipmentStats(startDate: Date, endDate: Date, scopeDepartmentIds?: string[]) {
     const equipments = await this.equipmentRepository.find({
       where: { isActive: true },
     });
@@ -369,9 +393,17 @@ export class ReportService {
     const stats: any[] = [];
 
     for (const equipment of equipments) {
-      const batches = await this.batchRepository.find({
-        where: { equipmentId: equipment.id, createdAt: Between(startDate, endDate) },
-      });
+      const batchQueryBuilder = this.batchRepository
+        .createQueryBuilder('batch')
+        .leftJoin('batch.instrumentPackage', 'pkg')
+        .where('batch.equipmentId = :equipmentId', { equipmentId: equipment.id })
+        .andWhere('batch.createdAt BETWEEN :startDate AND :endDate', { startDate, endDate });
+
+      if (scopeDepartmentIds && scopeDepartmentIds.length > 0) {
+        batchQueryBuilder.andWhere('pkg.departmentId IN (:...ids)', { ids: scopeDepartmentIds });
+      }
+
+      const batches = await batchQueryBuilder.getMany();
 
       const totalBatches = batches.length;
       const failedBatches = batches.filter((b) => b.status === 'failed' || b.isLocked).length;
@@ -379,9 +411,18 @@ export class ReportService {
         ? parseFloat(((failedBatches / totalBatches) * 100).toFixed(2))
         : 0;
 
-      const workOrders = await this.workOrderRepository.find({
-        where: { equipmentId: equipment.id, createdAt: Between(startDate, endDate) },
-      });
+      const woQueryBuilder = this.workOrderRepository
+        .createQueryBuilder('wo')
+        .leftJoin('wo.cleaningTask', 'task')
+        .leftJoin('task.instrumentPackage', 'pkg')
+        .where('wo.equipmentId = :equipmentId', { equipmentId: equipment.id })
+        .andWhere('wo.createdAt BETWEEN :startDate AND :endDate', { startDate, endDate });
+
+      if (scopeDepartmentIds && scopeDepartmentIds.length > 0) {
+        woQueryBuilder.andWhere('pkg.departmentId IN (:...ids)', { ids: scopeDepartmentIds });
+      }
+
+      const workOrders = await woQueryBuilder.getMany();
 
       const completedWorkOrders = workOrders.filter(
         (w) => w.status === WorkOrderStatus.COMPLETED
@@ -402,18 +443,20 @@ export class ReportService {
         );
       }
 
-      stats.push({
-        equipmentId: equipment.id,
-        equipmentCode: equipment.code,
-        equipmentName: equipment.name,
-        equipmentType: equipment.type,
-        totalBatches,
-        failedBatches,
-        failureRate,
-        workOrders: workOrders.length,
-        completedWorkOrders: completedWorkOrders.length,
-        avgMaintenanceHours,
-      });
+      if (totalBatches > 0 || workOrders.length > 0) {
+        stats.push({
+          equipmentId: equipment.id,
+          equipmentCode: equipment.code,
+          equipmentName: equipment.name,
+          equipmentType: equipment.type,
+          totalBatches,
+          failedBatches,
+          failureRate,
+          workOrders: workOrders.length,
+          completedWorkOrders: completedWorkOrders.length,
+          avgMaintenanceHours,
+        });
+      }
     }
 
     return stats;

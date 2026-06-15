@@ -134,41 +134,66 @@ export class EquipmentService {
   }
 
   async getEquipmentStats() {
-    const [allEquipments] = await this.equipmentRepository.findAndCount({
+    const allEquipments = await this.equipmentRepository.find({
       where: { isActive: true },
     });
 
     const [allBatches] = await this.batchRepository.findAndCount();
-    const [allWorkOrders] = await this.workOrderRepository.findAndCount();
+    const allWorkOrders = await this.workOrderRepository.find({
+      relations: ['equipment', 'assignedEngineer'],
+    });
 
-    const types = [...new Set(allEquipments.map((e) => e.type))];
+    const typeMap = new Map<string, number>();
+    allEquipments.forEach((e) => {
+      const key = e.type || 'unknown';
+      typeMap.set(key, (typeMap.get(key) || 0) + 1);
+    });
+    const types = Array.from(typeMap.entries()).map(([type, count]) => ({ type, count }));
 
     const now = new Date();
     const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const [recentBatches] = await this.batchRepository.findAndCount({
-      where: { createdAt: new Date() as any },
-    });
+    const last30DaysRuns = await this.batchRepository
+      .createQueryBuilder('batch')
+      .where('batch.createdAt >= :last30Days', { last30Days })
+      .getCount();
 
-    const [recentWorkOrders] = await this.workOrderRepository.findAndCount({
-      where: { createdAt: new Date() as any },
-    });
+    const last30DaysWorkOrders = await this.workOrderRepository
+      .createQueryBuilder('wo')
+      .where('wo.createdAt >= :last30Days', { last30Days })
+      .getCount();
 
     const pendingWorkOrders = allWorkOrders.filter(
-      (w) => w.status === WorkOrderStatus.PENDING || w.status === WorkOrderStatus.ASSIGNED
+      (w) =>
+        w.status === WorkOrderStatus.OPEN ||
+        w.status === WorkOrderStatus.ASSIGNED ||
+        w.status === WorkOrderStatus.IN_PROGRESS
     );
+
+    const pendingByType: Record<string, number> = {};
+    pendingWorkOrders.forEach((wo) => {
+      const key = (wo.equipmentType || wo.equipment?.type || 'unknown') as string;
+      pendingByType[key] = (pendingByType[key] || 0) + 1;
+    });
+
+    const byStatus = {
+      open: allWorkOrders.filter((w) => w.status === WorkOrderStatus.OPEN).length,
+      assigned: allWorkOrders.filter((w) => w.status === WorkOrderStatus.ASSIGNED).length,
+      inProgress: allWorkOrders.filter((w) => w.status === WorkOrderStatus.IN_PROGRESS).length,
+      completed: allWorkOrders.filter((w) => w.status === WorkOrderStatus.COMPLETED).length,
+      cancelled: allWorkOrders.filter((w) => w.status === WorkOrderStatus.CANCELLED).length,
+    };
 
     return {
       totalEquipments: allEquipments.length,
-      types: types.map((type) => ({
-        type,
-        count: allEquipments.filter((e) => e.type === type).length,
-      })),
+      equipmentTypes: types,
       totalRuns: allBatches.length,
       totalWorkOrders: allWorkOrders.length,
       pendingWorkOrders: pendingWorkOrders.length,
-      last30DaysRuns: recentBatches.length,
-      last30DaysWorkOrders: recentWorkOrders.length,
+      pendingWorkOrdersByType: Object.entries(pendingByType).map(([type, count]) => ({ type, count })),
+      pendingWorkOrdersByStatus: byStatus,
+      last30DaysRuns,
+      last30DaysWorkOrders,
     };
   }
 
