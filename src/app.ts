@@ -20,6 +20,14 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'CSSD Trace System API is running',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.use('/api', routes);
 
 app.use(errorHandler);

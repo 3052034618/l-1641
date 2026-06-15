@@ -3,6 +3,7 @@ import { CleaningProgram, ContaminationLevel } from '../enums';
 import { InstrumentPackage } from './InstrumentPackage.entity';
 import { User } from './User.entity';
 import { WorkOrder } from './WorkOrder.entity';
+import { Equipment } from './Equipment.entity';
 
 @Entity('cleaning_tasks')
 export class CleaningTask {
@@ -34,6 +35,13 @@ export class CleaningTask {
 
   @Column()
   operatorId: string;
+
+  @ManyToOne(() => Equipment, { nullable: true })
+  @JoinColumn({ name: 'equipmentId' })
+  equipment: Equipment;
+
+  @Column({ nullable: true })
+  equipmentId: string;
 
   @Column({ type: 'timestamp', nullable: true })
   startedAt: Date;

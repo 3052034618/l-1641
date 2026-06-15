@@ -66,6 +66,7 @@ export enum WorkOrderStatus {
   IN_PROGRESS = 'in_progress',
   COMPLETED = 'completed',
   CLOSED = 'closed',
+  CANCELLED = 'cancelled',
 }
 
 export enum WorkOrderPriority {

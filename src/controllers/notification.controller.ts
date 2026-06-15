@@ -1,7 +1,8 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { notificationService } from '../services/notification.service';
-import { successResponse, paginatedResponse, successResponseWithMessage } from '../utils/response';
+import { successResponse, paginatedResponse } from '../utils/response';
+import { NotFoundError } from '../errors/CustomError';
 
 export class NotificationController {
   async getNotifications(req: AuthRequest, res: Response, next: NextFunction) {
@@ -13,6 +14,20 @@ export class NotificationController {
 
       const result = await notificationService.getUserNotifications(userId, page, pageSize, isRead);
       return paginatedResponse(res, result.notifications, page, pageSize, result.total);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getNotificationById(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId;
+      const { id } = req.params;
+      const result = await notificationService.getById(id, userId);
+      if (!result) {
+        throw new NotFoundError('Notification not found');
+      }
+      return successResponse(res, result, 'Notification retrieved');
     } catch (error) {
       next(error);
     }

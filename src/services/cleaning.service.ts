@@ -124,11 +124,27 @@ export class CleaningService {
 
     const assignedProgram = dto.assignedProgram || (await this.assignProgramByContaminationLevel(pkg.contaminationLevel));
 
+    let equipmentId = dto.equipmentId;
+    if (!equipmentId) {
+      const defaultEquipment = await this.equipmentRepository.findOne({
+        where: { type: 'washer' as any, isActive: true },
+      });
+      if (!defaultEquipment) {
+        const anyEquipment = await this.equipmentRepository.findOne({
+          where: { isActive: true },
+        });
+        equipmentId = anyEquipment?.id;
+      } else {
+        equipmentId = defaultEquipment.id;
+      }
+    }
+
     const task = this.cleaningTaskRepository.create({
       packageId: dto.packageId,
       contaminationLevel: pkg.contaminationLevel,
       assignedProgram,
       operatorId,
+      equipmentId,
     });
 
     const oldStatus = pkg.status;
@@ -145,7 +161,7 @@ export class CleaningService {
       PackageStatus.CLEANING
     );
 
-    logger.info(`Cleaning task created for package ${pkg.barcode}, program: ${assignedProgram}`);
+    logger.info(`Cleaning task created for package ${pkg.barcode}, program: ${assignedProgram}, equipment: ${equipmentId}`);
 
     return task;
   }
@@ -283,18 +299,34 @@ export class CleaningService {
   private async createWorkOrderForAnomalies(task: CleaningTask, anomalies: any[]) {
     const hasError = anomalies.some((a) => a.severity === 'error');
 
-    const equipment = await this.equipmentRepository.findOne({
-      where: { type: undefined },
-    });
+    let equipmentId = task.equipmentId;
+    if (!equipmentId) {
+      const equipment = await this.equipmentRepository.findOne({
+        where: { isActive: true },
+      });
+      equipmentId = equipment?.id;
+    }
 
-    const defaultEquipmentId = equipment?.id || '00000000-0000-0000-0000-000000000000';
+    if (!equipmentId) {
+      throw new BadRequestError('No equipment available for work order creation');
+    }
 
-    return workOrderService.create({
-      equipmentId: defaultEquipmentId,
+    const workOrder = await workOrderService.create({
+      equipmentId,
       title: `清洗设备参数异常 - ${task.assignedProgram}`,
       description: `清洗任务运行参数异常：${anomalies.map((a) => a.description).join('; ')}`,
       priority: hasError ? WorkOrderPriority.URGENT : WorkOrderPriority.HIGH,
     }, task.id);
+
+    const equipment = await this.equipmentRepository.findOne({
+      where: { id: equipmentId },
+    });
+    if (equipment) {
+      equipment.status = 'MAINTENANCE' as any;
+      await this.equipmentRepository.save(equipment);
+    }
+
+    return workOrder;
   }
 
   async getTaskById(id: string) {

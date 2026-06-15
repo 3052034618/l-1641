@@ -140,7 +140,7 @@ export class RecoveryService {
   async inspectAndRecover(dto: RecoveryInspectionDto, operatorId: string) {
     const pkg = await this.packageRepository.findOne({
       where: { id: dto.packageId },
-      relations: ['department', 'template'],
+      relations: ['department', 'template', 'template.items', 'template.items.instrument'],
     });
 
     if (!pkg) {
@@ -151,7 +151,11 @@ export class RecoveryService {
       throw new BadRequestError('Package is locked, cannot process recovery');
     }
 
-    const inspectionResult = this.validateInstrumentItems(dto.instrumentItems);
+    const templateItems = pkg.template?.items || [];
+    const inspectionResult = this.validateInstrumentItemsWithTemplate(
+      dto.instrumentItems,
+      templateItems
+    );
 
     const recoveryRecord = this.recoveryRepository.create({
       packageId: dto.packageId,
@@ -162,7 +166,11 @@ export class RecoveryService {
 
     const oldStatus = pkg.status;
 
-    if (inspectionResult.totalMissingCount > 0 || inspectionResult.totalDamagedCount > 0) {
+    const hasIssues = inspectionResult.totalMissingCount > 0
+      || inspectionResult.totalDamagedCount > 0
+      || inspectionResult.missingTypes.length > 0;
+
+    if (hasIssues) {
       recoveryRecord.isRejected = true;
       recoveryRecord.rejectionReason = this.generateRejectionReason(inspectionResult);
       recoveryRecord.isComplete = false;
@@ -413,15 +421,83 @@ export class RecoveryService {
     return {
       missingItems,
       damagedItems,
+      missingTypes: [],
       totalMissingCount: missingItems.reduce((sum, item) => sum + item.missingQuantity, 0),
       totalDamagedCount: damagedItems.length,
+    };
+  }
+
+  private validateInstrumentItemsWithTemplate(actualItems: InstrumentItem[], templateItems: any[]) {
+    const missingItems: any[] = [];
+    const missingTypes: any[] = [];
+    const damagedItems: any[] = [];
+
+    const actualItemMap = new Map<string, InstrumentItem>();
+    actualItems.forEach((item) => {
+      actualItemMap.set(item.instrumentId, item);
+    });
+
+    for (const templateItem of templateItems) {
+      const actualItem = actualItemMap.get(templateItem.instrumentId);
+
+      if (!actualItem) {
+        missingTypes.push({
+          instrumentId: templateItem.instrumentId,
+          instrumentCode: templateItem.instrument?.code || '',
+          instrumentName: templateItem.instrument?.name || 'Unknown',
+          expectedQuantity: templateItem.requiredQuantity,
+          actualQuantity: 0,
+          missingQuantity: templateItem.requiredQuantity,
+        });
+      } else {
+        if (actualItem.actualQuantity < templateItem.requiredQuantity) {
+          missingItems.push({
+            instrumentId: templateItem.instrumentId,
+            instrumentCode: templateItem.instrument?.code || actualItem.instrumentCode,
+            instrumentName: templateItem.instrument?.name || actualItem.instrumentName,
+            expectedQuantity: templateItem.requiredQuantity,
+            actualQuantity: actualItem.actualQuantity,
+            missingQuantity: templateItem.requiredQuantity - actualItem.actualQuantity,
+          });
+        }
+
+        if (actualItem.status === 'damaged') {
+          damagedItems.push({
+            instrumentId: templateItem.instrumentId,
+            instrumentCode: templateItem.instrument?.code || actualItem.instrumentCode,
+            instrumentName: templateItem.instrument?.name || actualItem.instrumentName,
+            description: actualItem.damageDescription || 'Damaged',
+          });
+        }
+
+        actualItemMap.delete(templateItem.instrumentId);
+      }
+    }
+
+    const totalMissingFromTypes = missingTypes.reduce((sum, item) => sum + item.missingQuantity, 0);
+    const totalMissingFromQuantity = missingItems.reduce((sum, item) => sum + item.missingQuantity, 0);
+
+    return {
+      missingItems,
+      missingTypes,
+      damagedItems,
+      totalMissingCount: totalMissingFromTypes + totalMissingFromQuantity,
+      totalDamagedCount: damagedItems.length,
+      missingTypeCount: missingTypes.length,
     };
   }
 
   private generateRejectionReason(inspectionResult: any): string {
     const reasons: string[] = [];
 
-    if (inspectionResult.totalMissingCount > 0) {
+    if (inspectionResult.missingTypes && inspectionResult.missingTypes.length > 0) {
+      const typeNames = inspectionResult.missingTypes.map((t: any) => t.instrumentName).join('、');
+      reasons.push(`缺少器械类型缺失：${typeNames}（共 ${inspectionResult.missingTypeCount} 种`);
+    }
+
+    if (inspectionResult.missingItems && inspectionResult.missingItems.length > 0) {
+      reasons.push(`数量不足 ${inspectionResult.totalMissingCount} 件`);
+    } else if (inspectionResult.totalMissingCount > 0 && (!inspectionResult.missingTypes || inspectionResult.missingTypes.length === 0)) {
       reasons.push(`缺失 ${inspectionResult.totalMissingCount} 件器械`);
     }
 

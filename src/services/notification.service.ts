@@ -294,6 +294,19 @@ export class NotificationService {
 
     return { unreadCount: count };
   }
+
+  async getById(id: string, userId?: string) {
+    const queryBuilder = this.notificationRepository
+      .createQueryBuilder('notification')
+      .where('notification.id = :id', { id });
+
+    if (userId) {
+      queryBuilder.andWhere('(notification.userId = :userId OR notification.targetRole IS NOT NULL)', { userId });
+    }
+
+    const notification = await queryBuilder.getOne();
+    return notification;
+  }
 }
 
 export const notificationService = new NotificationService();

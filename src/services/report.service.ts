@@ -1,6 +1,5 @@
-import { Repository, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+import { Repository, Between, MoreThanOrEqual } from 'typeorm';
 import * as ExcelJS from 'exceljs';
-import * as moment from 'moment';
 import {
   OperationReport,
   Department,
@@ -11,17 +10,9 @@ import {
   WorkOrder,
   DistributionRecord,
   RecoveryRecord,
-  CleaningTask,
 } from '../entities';
 import { AppDataSource } from '../data-source';
-import {
-  GenerateReportDto,
-  ExportReportDto,
-  DepartmentStats,
-  SterilizationStats,
-  EquipmentStats,
-  DailyReportData,
-} from '../dtos/report.dto';
+import { GenerateReportDto, ExportReportDto } from '../dtos/report.dto';
 import { PackageStatus, WorkOrderStatus } from '../enums';
 import { NotFoundError } from '../errors/CustomError';
 import { notificationService } from './notification.service';
@@ -37,7 +28,6 @@ export class ReportService {
   private workOrderRepository: Repository<WorkOrder>;
   private distributionRepository: Repository<DistributionRecord>;
   private recoveryRepository: Repository<RecoveryRecord>;
-  private cleaningRepository: Repository<CleaningTask>;
 
   constructor() {
     this.reportRepository = AppDataSource.getRepository(OperationReport);
@@ -49,7 +39,12 @@ export class ReportService {
     this.workOrderRepository = AppDataSource.getRepository(WorkOrder);
     this.distributionRepository = AppDataSource.getRepository(DistributionRecord);
     this.recoveryRepository = AppDataSource.getRepository(RecoveryRecord);
-    this.cleaningRepository = AppDataSource.getRepository(CleaningTask);
+  }
+
+  generateReportCode(date: Date): string {
+    const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `RPT-${dateStr}-${random}`;
   }
 
   async generateDailyReport(dto?: GenerateReportDto): Promise<OperationReport> {
@@ -63,16 +58,17 @@ export class ReportService {
 
     const reportData = await this.calculateReportData(startDate, endDate, dto?.zone, dto?.departmentId);
 
+    const reportCode = this.generateReportCode(startDate);
+
     const report = this.reportRepository.create({
+      reportCode,
       reportDate: startDate,
-      startDate,
-      endDate,
-      zone: dto?.zone || null,
-      departmentId: dto?.departmentId || null,
+      zone: dto?.zone as any || null,
       departmentStats: reportData.departmentStats,
       sterilizationStats: reportData.sterilizationStats,
       equipmentStats: reportData.equipmentStats,
-      summaryStats: reportData.summary,
+      summary: reportData.summary,
+      isGenerated: true,
       generatedAt: new Date(),
     });
 
@@ -80,11 +76,11 @@ export class ReportService {
 
     await notificationService.notifyReportGenerated(
       report.id,
-      startDate.toISOString().split('T')[0],
-      reportData.summary.totalPackagesProcessed
+      reportCode,
+      startDate
     );
 
-    logger.info(`Daily report generated for ${startDate.toISOString().split('T')[0]}`);
+    logger.info(`Daily report generated: ${reportCode}`);
 
     return report;
   }
@@ -94,40 +90,44 @@ export class ReportService {
     endDate: Date,
     zone?: string,
     departmentId?: string
-  ): Promise<DailyReportData> {
+  ) {
     const departmentStats = await this.calculateDepartmentStats(startDate, endDate, zone, departmentId);
     const sterilizationStats = await this.calculateSterilizationStats(startDate, endDate);
     const equipmentStats = await this.calculateEquipmentStats(startDate, endDate);
 
-    const totalPackagesProcessed = departmentStats.reduce((sum, d) => sum + d.totalPackages, 0);
-    const totalRecycled = departmentStats.reduce((sum, d) => sum + d.recycledCount, 0);
-    const totalSterilized = departmentStats.reduce((sum, d) => sum + d.sterilizedCount, 0);
-    const totalDistributed = departmentStats.reduce((sum, d) => sum + d.distributedCount, 0);
-    const avgTurnoverRate = totalPackagesProcessed > 0
+    const totalPackages = departmentStats.reduce((sum, d) => sum + d.totalPackages, 0);
+    const totalRecovery = departmentStats.reduce((sum, d) => sum + d.recoveredPackages, 0);
+    const totalSterilization = departmentStats.reduce((sum, d) => sum + d.sterilizedPackages, 0);
+    const totalDistribution = departmentStats.reduce((sum, d) => sum + d.distributedPackages, 0);
+    const overallTurnoverRate = departmentStats.length > 0
       ? departmentStats.reduce((sum, d) => sum + d.turnoverRate, 0) / departmentStats.length
       : 0;
 
+    const totalExpired = await this.packageRepository.count({
+      where: { status: PackageStatus.EXPIRED },
+    });
+
+    const totalRejected = await this.recoveryRepository.count({
+      where: { isRejected: true, createdAt: Between(startDate, endDate) },
+    });
+
+    const summary = {
+      totalPackages,
+      totalRecovery,
+      totalCleaning: totalRecovery,
+      totalSterilization,
+      totalDistribution,
+      totalExpired,
+      totalRejected,
+      overallPassRate: sterilizationStats.passRate,
+      overallTurnoverRate: parseFloat(overallTurnoverRate.toFixed(2)),
+    };
+
     return {
-      reportDate: startDate.toISOString().split('T')[0],
-      generatedAt: new Date().toISOString(),
-      period: {
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
-      },
       departmentStats,
       sterilizationStats,
       equipmentStats,
-      summary: {
-        totalPackagesProcessed,
-        totalRecycled,
-        totalSterilized,
-        totalDistributed,
-        avgTurnoverRate,
-        overallSterilizationPassRate: sterilizationStats.passRate,
-        overallEquipmentFailureRate: equipmentStats.length > 0
-          ? equipmentStats.reduce((sum, e) => sum + e.failureRate, 0) / equipmentStats.length
-          : 0,
-      },
+      summary,
     };
   }
 
@@ -136,8 +136,10 @@ export class ReportService {
     endDate: Date,
     zone?: string,
     departmentId?: string
-  ): Promise<DepartmentStats[]> {
-    let departments = await this.departmentRepository.find();
+  ) {
+    let departments = await this.departmentRepository.find({
+      where: { isActive: true },
+    });
 
     if (zone) {
       departments = departments.filter((d) => d.zone === zone);
@@ -147,177 +149,206 @@ export class ReportService {
       departments = departments.filter((d) => d.id === departmentId);
     }
 
-    const stats: DepartmentStats[] = [];
+    const stats: any[] = [];
 
     for (const dept of departments) {
-      const dateFilter = {
-        createdAt: Between(startDate, endDate),
-      };
-
-      const [allPackages] = await this.packageRepository.findAndCount({
+      const allPackages = await this.packageRepository.find({
         where: { departmentId: dept.id },
       });
 
-      const recycledResult = await this.recoveryRepository.findAndCount({
-        where: { departmentId: dept.id, ...dateFilter },
+      const recoveredPackages = await this.recoveryRepository
+        .createQueryBuilder('record')
+        .leftJoin('record.instrumentPackage', 'pkg')
+        .where('pkg.departmentId = :deptId', { deptId: dept.id })
+        .andWhere('record.createdAt BETWEEN :startDate AND :endDate', { startDate, endDate })
+        .andWhere('record.isRejected = :isRejected', { isRejected: false })
+        .getCount();
+
+      const sterilizedBatches = await this.batchRepository.count({
+        where: { createdAt: Between(startDate, endDate), status: 'completed' as any },
       });
 
-      const cleanedResult = await this.cleaningRepository.findAndCount({
-        where: { ...dateFilter },
+      const distributedPackages = await this.distributionRepository.count({
+        where: { toDepartmentId: dept.id, createdAt: Between(startDate, endDate) },
       });
 
-      const sterilizedResult = await this.batchRepository.findAndCount({
-        where: { status: 'completed', ...dateFilter },
-      });
+      const rejectedCount = await this.recoveryRepository
+        .createQueryBuilder('record')
+        .leftJoin('record.instrumentPackage', 'pkg')
+        .where('pkg.departmentId = :deptId', { deptId: dept.id })
+        .andWhere('record.createdAt BETWEEN :startDate AND :endDate', { startDate, endDate })
+        .andWhere('record.isRejected = :isRejected', { isRejected: true })
+        .getCount();
 
-      const distributedResult = await this.distributionRepository.findAndCount({
-        where: { toDepartmentId: dept.id, ...dateFilter },
-      });
+      const usedPackages = allPackages.filter(
+        (p) => p.status === PackageStatus.USED || p.status === PackageStatus.DISTRIBUTED
+      );
 
-      const rejectedResult = await this.recoveryRepository.findAndCount({
-        where: { departmentId: dept.id, ...dateFilter },
-      });
-
-      const usedPackages = allPackages.filter((p) => p.status === PackageStatus.USED || p.status === PackageStatus.DISTRIBUTED);
       const turnoverRate = allPackages.length > 0
-        ? (usedPackages.length / allPackages.length) * 100
+        ? parseFloat(((usedPackages.length / allPackages.length) * 100).toFixed(2))
         : 0;
 
-      const turnaroundTimes: number[] = [];
+      let avgTurnoverDays = 0;
+      const turnoverDays: number[] = [];
       for (const pkg of usedPackages) {
         if (pkg.receivedAt && pkg.sterilizedAt) {
-          const turnaround = (pkg.sterilizedAt.getTime() - pkg.receivedAt.getTime()) / (1000 * 60 * 60);
-          turnaroundTimes.push(turnaround);
+          const days = (pkg.sterilizedAt.getTime() - pkg.receivedAt.getTime()) / (1000 * 60 * 60 * 24);
+          turnoverDays.push(days);
         }
       }
-
-      const avgTurnaroundTime = turnaroundTimes.length > 0
-        ? turnaroundTimes.reduce((a, b) => a + b, 0) / turnaroundTimes.length
-        : 0;
+      if (turnoverDays.length > 0) {
+        avgTurnoverDays = parseFloat(
+          (turnoverDays.reduce((a, b) => a + b, 0) / turnoverDays.length).toFixed(2)
+        );
+      }
 
       stats.push({
         departmentId: dept.id,
-        departmentName: dept.name,
         departmentCode: dept.code,
+        departmentName: dept.name,
         zone: dept.zone || '',
         totalPackages: allPackages.length,
-        recycledCount: recycledResult[1],
-        cleanedCount: cleanedResult[1],
-        sterilizedCount: sterilizedResult[1],
-        distributedCount: distributedResult[1],
-        turnoverRate: parseFloat(turnoverRate.toFixed(2)),
-        avgTurnaroundTime: parseFloat(avgTurnaroundTime.toFixed(2)),
-        rejectedCount: rejectedResult[1],
-        rejectionRate: recycledResult[1] > 0
-          ? parseFloat(((rejectedResult[1] / recycledResult[1]) * 100).toFixed(2))
-          : 0,
+        recoveredPackages,
+        sterilizedPackages: sterilizedBatches,
+        distributedPackages,
+        turnoverRate,
+        averageTurnoverDays: avgTurnoverDays,
+        rejectedCount,
       });
     }
 
     return stats;
   }
 
-  private async calculateSterilizationStats(
-    startDate: Date,
-    endDate: Date
-  ): Promise<SterilizationStats> {
-    const dateFilter = {
-      createdAt: Between(startDate, endDate),
-    };
-
+  private async calculateSterilizationStats(startDate: Date, endDate: Date) {
     const batches = await this.batchRepository.find({
-      where: { status: 'completed', ...dateFilter },
-      relations: ['records', 'equipment'],
-    });
-
-    const passedBatches = batches.filter((b) => b.finalResult?.isPassed);
-    const failedBatches = batches.filter((b) => b.finalResult?.isPassed === false);
-    const lockedBatches = batches.filter((b) => b.isLocked);
-
-    const cycleTimes = batches
-      .filter((b) => b.startedAt && b.completedAt)
-      .map((b) => (b.completedAt!.getTime() - b.startedAt!.getTime()) / (1000 * 60 * 60));
-
-    const allRecords = await this.recordRepository.find({
       where: { createdAt: Between(startDate, endDate) },
+      relations: ['records'],
     });
 
-    const anomalyCount = allRecords.filter((r) => r.hasAnomaly).length;
+    const totalBatches = batches.length;
+    const passedBatches = batches.filter((b) => b.status === 'completed').length;
+    const failedBatches = batches.filter((b) => b.status === 'failed').length;
+    const lockedBatches = batches.filter((b) => b.isLocked).length;
 
-    const temperatures = allRecords.map((r) => r.temperature).filter((t) => t > 0);
-    const pressures = allRecords.map((r) => r.pressure).filter((p) => p > 0);
+    const passRate = totalBatches > 0
+      ? parseFloat(((passedBatches / totalBatches) * 100).toFixed(2))
+      : 100;
+
+    let totalDuration = 0;
+    let durationCount = 0;
+    let totalTemp = 0;
+    let totalPressure = 0;
+    let tempCount = 0;
+    let pressureCount = 0;
+    let tempAnomalies = 0;
+    let pressureAnomalies = 0;
+
+    for (const batch of batches) {
+      if (batch.startedAt && batch.completedAt) {
+        totalDuration += (batch.completedAt.getTime() - batch.startedAt.getTime()) / (1000 * 60 * 60);
+        durationCount++;
+      }
+
+      if (batch.records) {
+        for (const record of batch.records) {
+          if (record.temperature > 0) {
+            totalTemp += record.temperature;
+            tempCount++;
+          }
+          if (record.pressure > 0) {
+            totalPressure += record.pressure;
+            pressureCount++;
+          }
+          if (record.anomalies && Array.isArray(record.anomalies)) {
+            tempAnomalies += record.anomalies.filter((a: any) => a.type === 'temperature').length;
+            pressureAnomalies += record.anomalies.filter((a: any) => a.type === 'pressure').length;
+          }
+          if (record.hasAnomaly) {
+            tempAnomalies++;
+          }
+        }
+      }
+    }
+
+    const averageDuration = durationCount > 0
+      ? parseFloat((totalDuration / durationCount).toFixed(2))
+      : 0;
+
+    const averageTemperature = tempCount > 0
+      ? parseFloat((totalTemp / tempCount).toFixed(2))
+      : 0;
+
+    const averagePressure = pressureCount > 0
+      ? parseFloat((totalPressure / pressureCount).toFixed(2))
+      : 0;
 
     return {
-      totalBatches: batches.length,
-      passedBatches: passedBatches.length,
-      failedBatches: failedBatches.length,
-      passRate: batches.length > 0
-        ? parseFloat(((passedBatches.length / batches.length) * 100).toFixed(2))
-        : 100,
-      avgCycleTime: cycleTimes.length > 0
-        ? parseFloat((cycleTimes.reduce((a, b) => a + b, 0) / cycleTimes.length).toFixed(2))
-        : 0,
-      anomalyCount,
-      lockedBatches: lockedBatches.length,
-      averageTemperature: temperatures.length > 0
-        ? parseFloat((temperatures.reduce((a, b) => a + b, 0) / temperatures.length).toFixed(2))
-        : 0,
-      averagePressure: pressures.length > 0
-        ? parseFloat((pressures.reduce((a, b) => a + b, 0) / pressures.length).toFixed(2))
-        : 0,
+      totalBatches,
+      passedBatches,
+      failedBatches,
+      passRate,
+      lockedBatches,
+      averageDuration,
+      averageTemperature,
+      averagePressure,
+      temperatureAnomalies: tempAnomalies,
+      pressureAnomalies: pressureAnomalies,
     };
   }
 
-  private async calculateEquipmentStats(
-    startDate: Date,
-    endDate: Date
-  ): Promise<EquipmentStats[]> {
-    const equipments = await this.equipmentRepository.find();
-    const stats: EquipmentStats[] = [];
+  private async calculateEquipmentStats(startDate: Date, endDate: Date) {
+    const equipments = await this.equipmentRepository.find({
+      where: { isActive: true },
+    });
+
+    const stats: any[] = [];
 
     for (const equipment of equipments) {
-      const dateFilter = {
-        createdAt: Between(startDate, endDate),
-      };
-
-      const runsResult = await this.batchRepository.findAndCount({
-        where: { equipmentId: equipment.id, status: 'completed', ...dateFilter },
+      const batches = await this.batchRepository.find({
+        where: { equipmentId: equipment.id, createdAt: Between(startDate, endDate) },
       });
 
-      const workOrdersResult = await this.workOrderRepository.findAndCount({
-        where: { equipmentId: equipment.id, ...dateFilter },
+      const totalBatches = batches.length;
+      const failedBatches = batches.filter((b) => b.status === 'failed' || b.isLocked).length;
+      const failureRate = totalBatches > 0
+        ? parseFloat(((failedBatches / totalBatches) * 100).toFixed(2))
+        : 0;
+
+      const workOrders = await this.workOrderRepository.find({
+        where: { equipmentId: equipment.id, createdAt: Between(startDate, endDate) },
       });
 
-      const failureCount = workOrdersResult[0].filter((w) => w.status === WorkOrderStatus.COMPLETED).length;
+      const completedWorkOrders = workOrders.filter(
+        (w) => w.status === WorkOrderStatus.COMPLETED
+      );
 
-      const completedOrders = workOrdersResult[0].filter((w) => w.status === WorkOrderStatus.COMPLETED);
-      const maintenanceTimes: number[] = [];
-      for (const order of completedOrders) {
-        if (order.createdAt && order.completedAt) {
-          maintenanceTimes.push((order.completedAt.getTime() - order.createdAt.getTime()) / (1000 * 60 * 60));
+      let avgMaintenanceHours = 0;
+      const maintenanceHours: number[] = [];
+      for (const wo of completedWorkOrders) {
+        if (wo.createdAt && wo.completedAt) {
+          maintenanceHours.push(
+            (wo.completedAt.getTime() - wo.createdAt.getTime()) / (1000 * 60 * 60)
+          );
         }
       }
-
-      const totalRunTime = runsResult[1] * (equipment.thresholds?.cycleTime || 60);
-      const totalTime = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60);
-      const uptime = totalTime > 0 ? parseFloat(((totalRunTime / totalTime) * 100).toFixed(2)) : 0;
+      if (maintenanceHours.length > 0) {
+        avgMaintenanceHours = parseFloat(
+          (maintenanceHours.reduce((a, b) => a + b, 0) / maintenanceHours.length).toFixed(2)
+        );
+      }
 
       stats.push({
         equipmentId: equipment.id,
-        equipmentName: equipment.name,
         equipmentCode: equipment.code,
+        equipmentName: equipment.name,
         equipmentType: equipment.type,
-        totalRuns: runsResult[1],
-        failureCount,
-        failureRate: runsResult[1] > 0
-          ? parseFloat(((failureCount / runsResult[1]) * 100).toFixed(2))
-          : 0,
-        avgRunTime: parseFloat((totalRunTime / (runsResult[1] || 1)).toFixed(2)),
-        maintenanceCount: completedOrders.length,
-        avgMaintenanceTime: maintenanceTimes.length > 0
-          ? parseFloat((maintenanceTimes.reduce((a, b) => a + b, 0) / maintenanceTimes.length).toFixed(2))
-          : 0,
-        uptime,
+        totalBatches,
+        failedBatches,
+        failureRate,
+        workOrders: workOrders.length,
+        completedWorkOrders: completedWorkOrders.length,
+        avgMaintenanceHours,
       });
     }
 
@@ -327,7 +358,6 @@ export class ReportService {
   async getReportById(id: string) {
     const report = await this.reportRepository.findOne({
       where: { id },
-      relations: ['department'],
     });
 
     if (!report) {
@@ -344,8 +374,7 @@ export class ReportService {
     departmentId?: string;
   }) {
     const queryBuilder = this.reportRepository
-      .createQueryBuilder('report')
-      .leftJoinAndSelect('report.department', 'department');
+      .createQueryBuilder('report');
 
     if (filters?.startDate) {
       queryBuilder.andWhere('report.reportDate >= :startDate', { startDate: filters.startDate });
@@ -357,10 +386,6 @@ export class ReportService {
 
     if (filters?.zone) {
       queryBuilder.andWhere('report.zone = :zone', { zone: filters.zone });
-    }
-
-    if (filters?.departmentId) {
-      queryBuilder.andWhere('report.departmentId = :departmentId', { departmentId: filters.departmentId });
     }
 
     const [reports, total] = await queryBuilder
@@ -390,18 +415,26 @@ export class ReportService {
     const summarySheet = workbook.addWorksheet('综合统计');
     summarySheet.columns = [
       { header: '指标', key: 'metric', width: 30 },
-      { header: '数值', key: 'value', width: 20 },
+      { header: '数值', key: 'value', width: 25 },
     ];
 
-    summarySheet.addRow({ metric: '报告日期', value: reportData.reportDate });
-    summarySheet.addRow({ metric: '统计周期', value: `${reportData.period.startDate} 至 ${reportData.period.endDate}` });
-    summarySheet.addRow({ metric: '器械包处理总数', value: reportData.summary.totalPackagesProcessed });
-    summarySheet.addRow({ metric: '回收总数', value: reportData.summary.totalRecycled });
-    summarySheet.addRow({ metric: '灭菌总数', value: reportData.summary.totalSterilized });
-    summarySheet.addRow({ metric: '发放总数', value: reportData.summary.totalDistributed });
-    summarySheet.addRow({ metric: '平均周转率(%)', value: reportData.summary.avgTurnoverRate });
-    summarySheet.addRow({ metric: '整体灭菌合格率(%)', value: reportData.summary.overallSterilizationPassRate });
-    summarySheet.addRow({ metric: '整体设备故障率(%)', value: reportData.summary.overallEquipmentFailureRate });
+    summarySheet.getRow(1).font = { bold: true };
+    summarySheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' },
+    };
+
+    summarySheet.addRow({ metric: '报告周期', value: `${startDate.toISOString().split('T')[0]} 至 ${endDate.toISOString().split('T')[0]}` });
+    summarySheet.addRow({ metric: '器械包总数', value: reportData.summary.totalPackages });
+    summarySheet.addRow({ metric: '回收总数', value: reportData.summary.totalRecovery });
+    summarySheet.addRow({ metric: '清洗总数', value: reportData.summary.totalCleaning });
+    summarySheet.addRow({ metric: '灭菌总数', value: reportData.summary.totalSterilization });
+    summarySheet.addRow({ metric: '发放总数', value: reportData.summary.totalDistribution });
+    summarySheet.addRow({ metric: '过期总数', value: reportData.summary.totalExpired });
+    summarySheet.addRow({ metric: '退回总数', value: reportData.summary.totalRejected });
+    summarySheet.addRow({ metric: '整体灭菌合格率(%)', value: reportData.summary.overallPassRate });
+    summarySheet.addRow({ metric: '整体周转率(%)', value: reportData.summary.overallTurnoverRate });
 
     const deptSheet = workbook.addWorksheet('科室统计');
     deptSheet.columns = [
@@ -409,15 +442,20 @@ export class ReportService {
       { header: '科室代码', key: 'departmentCode', width: 15 },
       { header: '区域', key: 'zone', width: 15 },
       { header: '器械包总数', key: 'totalPackages', width: 12 },
-      { header: '回收数', key: 'recycledCount', width: 10 },
-      { header: '清洗数', key: 'cleanedCount', width: 10 },
-      { header: '灭菌数', key: 'sterilizedCount', width: 10 },
-      { header: '发放数', key: 'distributedCount', width: 10 },
+      { header: '回收数', key: 'recoveredPackages', width: 10 },
+      { header: '灭菌数', key: 'sterilizedPackages', width: 10 },
+      { header: '发放数', key: 'distributedPackages', width: 10 },
       { header: '周转率(%)', key: 'turnoverRate', width: 12 },
-      { header: '平均周转时间(h)', key: 'avgTurnaroundTime', width: 15 },
+      { header: '平均周转天数', key: 'averageTurnoverDays', width: 15 },
       { header: '退回数', key: 'rejectedCount', width: 10 },
-      { header: '退回率(%)', key: 'rejectionRate', width: 12 },
     ];
+
+    deptSheet.getRow(1).font = { bold: true };
+    deptSheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' },
+    };
 
     for (const stat of reportData.departmentStats) {
       deptSheet.addRow(stat);
@@ -426,32 +464,46 @@ export class ReportService {
     const sterilizationSheet = workbook.addWorksheet('灭菌统计');
     sterilizationSheet.columns = [
       { header: '指标', key: 'metric', width: 30 },
-      { header: '数值', key: 'value', width: 20 },
+      { header: '数值', key: 'value', width: 25 },
     ];
+
+    sterilizationSheet.getRow(1).font = { bold: true };
+    sterilizationSheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' },
+    };
 
     sterilizationSheet.addRow({ metric: '总批次', value: reportData.sterilizationStats.totalBatches });
     sterilizationSheet.addRow({ metric: '合格批次', value: reportData.sterilizationStats.passedBatches });
     sterilizationSheet.addRow({ metric: '不合格批次', value: reportData.sterilizationStats.failedBatches });
     sterilizationSheet.addRow({ metric: '合格率(%)', value: reportData.sterilizationStats.passRate });
-    sterilizationSheet.addRow({ metric: '平均灭菌周期(h)', value: reportData.sterilizationStats.avgCycleTime });
-    sterilizationSheet.addRow({ metric: '异常次数', value: reportData.sterilizationStats.anomalyCount });
     sterilizationSheet.addRow({ metric: '锁定批次', value: reportData.sterilizationStats.lockedBatches });
+    sterilizationSheet.addRow({ metric: '平均灭菌周期(h)', value: reportData.sterilizationStats.averageDuration });
     sterilizationSheet.addRow({ metric: '平均温度(°C)', value: reportData.sterilizationStats.averageTemperature });
     sterilizationSheet.addRow({ metric: '平均压力(kPa)', value: reportData.sterilizationStats.averagePressure });
+    sterilizationSheet.addRow({ metric: '温度异常次数', value: reportData.sterilizationStats.temperatureAnomalies });
+    sterilizationSheet.addRow({ metric: '压力异常次数', value: reportData.sterilizationStats.pressureAnomalies });
 
     const equipmentSheet = workbook.addWorksheet('设备统计');
     equipmentSheet.columns = [
       { header: '设备名称', key: 'equipmentName', width: 20 },
       { header: '设备代码', key: 'equipmentCode', width: 15 },
       { header: '设备类型', key: 'equipmentType', width: 15 },
-      { header: '运行次数', key: 'totalRuns', width: 12 },
-      { header: '故障次数', key: 'failureCount', width: 12 },
+      { header: '运行批次', key: 'totalBatches', width: 12 },
+      { header: '故障批次', key: 'failedBatches', width: 12 },
       { header: '故障率(%)', key: 'failureRate', width: 12 },
-      { header: '平均运行时间(h)', key: 'avgRunTime', width: 15 },
-      { header: '维护次数', key: 'maintenanceCount', width: 12 },
-      { header: '平均维护时间(h)', key: 'avgMaintenanceTime', width: 15 },
-      { header: '可用率(%)', key: 'uptime', width: 12 },
+      { header: '工单数', key: 'workOrders', width: 10 },
+      { header: '完成工单', key: 'completedWorkOrders', width: 12 },
+      { header: '平均维修时长(h)', key: 'avgMaintenanceHours', width: 15 },
     ];
+
+    equipmentSheet.getRow(1).font = { bold: true };
+    equipmentSheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' },
+    };
 
     for (const stat of reportData.equipmentStats) {
       equipmentSheet.addRow(stat);
@@ -465,8 +517,8 @@ export class ReportService {
     const today = new Date();
     const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-    const allReportsResult = await this.reportRepository.findAndCount();
-    const monthReportsResult = await this.reportRepository.findAndCount({
+    const [allReports] = await this.reportRepository.findAndCount();
+    const monthReports = await this.reportRepository.count({
       where: { reportDate: MoreThanOrEqual(startOfMonth) },
     });
 
@@ -478,37 +530,43 @@ export class ReportService {
     const lastReport = recentReports[0];
 
     return {
-      totalReports: allReportsResult[1],
-      monthReports: monthReportsResult[1],
+      totalReports: allReports.length,
+      monthReports,
       lastGenerated: lastReport
         ? {
-            date: lastReport.reportDate,
-            totalPackages: lastReport.summaryStats?.totalPackagesProcessed || 0,
+            reportCode: lastReport.reportCode,
+            reportDate: lastReport.reportDate,
+            totalPackages: lastReport.summary?.totalPackages || 0,
             passRate: lastReport.sterilizationStats?.passRate || 0,
           }
         : null,
       recentReports: recentReports.map((r) => ({
-        date: r.reportDate,
-        totalPackages: r.summaryStats?.totalPackagesProcessed || 0,
+        id: r.id,
+        reportCode: r.reportCode,
+        reportDate: r.reportDate,
+        totalPackages: r.summary?.totalPackages || 0,
         passRate: r.sterilizationStats?.passRate || 0,
-        failureRate: r.summaryStats?.overallEquipmentFailureRate || 0,
       })),
     };
   }
 
   async scheduleDailyReport() {
-    const cron = require('node-cron');
-    cron.schedule('0 0 0 * * *', async () => {
-      logger.info('Starting daily report generation...');
-      try {
-        await this.generateDailyReport();
-        logger.info('Daily report generated successfully');
-      } catch (error) {
-        logger.error('Failed to generate daily report:', error);
-      }
-    });
+    try {
+      const cron = require('node-cron');
+      cron.schedule('0 0 0 * * *', async () => {
+        logger.info('Starting daily report generation...');
+        try {
+          await this.generateDailyReport();
+          logger.info('Daily report generated successfully');
+        } catch (error) {
+          logger.error('Failed to generate daily report:', error);
+        }
+      });
 
-    logger.info('Daily report scheduler started (runs at 00:00 daily)');
+      logger.info('Daily report scheduler started (runs at 00:00 daily)');
+    } catch (error) {
+      logger.warn('Failed to start daily report scheduler:', error);
+    }
   }
 }
 

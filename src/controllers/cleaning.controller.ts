@@ -86,7 +86,7 @@ export class CleaningController {
     }
   }
 
-  async getProgramConfigs(req: AuthRequest, res: Response, next: NextFunction) {
+  async getCleaningPrograms(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const result = await cleaningService.getProgramConfigs();
       return successResponse(res, result, 'Cleaning program configs retrieved');
@@ -95,7 +95,7 @@ export class CleaningController {
     }
   }
 
-  async getTaskStats(req: AuthRequest, res: Response, next: NextFunction) {
+  async getCleaningStats(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const result = await cleaningService.getTaskStats();
       return successResponse(res, result, 'Cleaning task stats retrieved');
