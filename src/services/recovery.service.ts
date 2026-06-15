@@ -2,7 +2,7 @@ import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { InstrumentPackage, RecoveryRecord, PackageTemplate, PackageTemplateItem, Instrument } from '../entities';
 import { AppDataSource } from '../data-source';
-import { CreatePackageDto, RecoveryInspectionDto, RejectPackageDto, UpdatePackageDto, InstrumentItem } from '../dtos/recovery.dto';
+import { CreatePackageDto, RecoveryInspectionDto, RejectPackageDto, UpdatePackageDto, InstrumentItem, CreateTemplateDto, UpdateTemplateDto } from '../dtos/recovery.dto';
 import { PackageStatus, ContaminationLevel } from '../enums';
 import { NotFoundError, BadRequestError, ConflictError } from '../errors/CustomError';
 import { notificationService } from './notification.service';
@@ -519,6 +519,156 @@ export class RecoveryService {
       .getManyAndCount();
 
     return { templates, total };
+  }
+
+  async getTemplateById(id: string) {
+    const template = await this.templateRepository.findOne({
+      where: { id },
+      relations: ['items', 'items.instrument'],
+    });
+
+    if (!template) {
+      throw new NotFoundError('Package template not found');
+    }
+
+    return template;
+  }
+
+  async createTemplate(dto: CreateTemplateDto) {
+    const existing = await this.templateRepository.findOne({
+      where: { code: dto.code },
+    });
+
+    if (existing) {
+      throw new ConflictError('Template code already exists');
+    }
+
+    for (const item of dto.items) {
+      const instrument = await this.instrumentRepository.findOne({
+        where: { id: item.instrumentId },
+      });
+      if (!instrument) {
+        throw new NotFoundError(`Instrument ${item.instrumentId} not found`);
+      }
+    }
+
+    const template = this.templateRepository.create({
+      code: dto.code,
+      name: dto.name,
+      validDays: dto.validDays || 7,
+      description: dto.description || '',
+      items: dto.items.map((item) =>
+        this.templateItemRepository.create({
+          instrumentId: item.instrumentId,
+          requiredQuantity: item.requiredQuantity,
+        })
+      ),
+    });
+
+    await this.templateRepository.save(template);
+
+    logger.info(`Package template created: ${template.code}`);
+
+    return this.getTemplateById(template.id);
+  }
+
+  async updateTemplate(id: string, dto: UpdateTemplateDto) {
+    const template = await this.templateRepository.findOne({
+      where: { id },
+      relations: ['items'],
+    });
+
+    if (!template) {
+      throw new NotFoundError('Package template not found');
+    }
+
+    if (dto.name) template.name = dto.name;
+    if (dto.validDays !== undefined) template.validDays = dto.validDays;
+    if (dto.description !== undefined) template.description = dto.description;
+
+    if (dto.items && dto.items.length > 0) {
+      for (const item of dto.items) {
+        const instrument = await this.instrumentRepository.findOne({
+          where: { id: item.instrumentId },
+        });
+        if (!instrument) {
+          throw new NotFoundError(`Instrument ${item.instrumentId} not found`);
+        }
+      }
+
+      await this.templateItemRepository.delete({ templateId: id });
+      template.items = dto.items.map((item) =>
+        this.templateItemRepository.create({
+          templateId: id,
+          instrumentId: item.instrumentId,
+          requiredQuantity: item.requiredQuantity,
+        })
+      );
+    }
+
+    await this.templateRepository.save(template);
+
+    logger.info(`Package template updated: ${template.code}`);
+
+    return this.getTemplateById(id);
+  }
+
+  async deleteTemplate(id: string) {
+    const template = await this.templateRepository.findOne({
+      where: { id },
+    });
+
+    if (!template) {
+      throw new NotFoundError('Package template not found');
+    }
+
+    await this.templateRepository.remove(template);
+
+    logger.info(`Package template deleted: ${template.code}`);
+
+    return { message: 'Template deleted successfully' };
+  }
+
+  async getRecoveryStats(startDate?: Date, endDate?: Date, departmentId?: string) {
+    const queryBuilder = this.recoveryRepository
+      .createQueryBuilder('record')
+      .leftJoinAndSelect('record.instrumentPackage', 'instrumentPackage');
+
+    if (startDate) {
+      queryBuilder.andWhere('record.createdAt >= :startDate', { startDate });
+    }
+    if (endDate) {
+      queryBuilder.andWhere('record.createdAt <= :endDate', { endDate });
+    }
+    if (departmentId) {
+      queryBuilder.andWhere('instrumentPackage.departmentId = :departmentId', { departmentId });
+    }
+
+    const [records] = await queryBuilder.getManyAndCount();
+
+    const totalRecords = records.length;
+    const rejectedRecords = records.filter((r) => r.isRejected).length;
+    const completedRecords = records.filter((r) => r.isComplete).length;
+
+    let totalMissingCount = 0;
+    let totalDamagedCount = 0;
+    records.forEach((r) => {
+      if (r.inspectionResult) {
+        totalMissingCount += r.inspectionResult.totalMissingCount || 0;
+        totalDamagedCount += r.inspectionResult.totalDamagedCount || 0;
+      }
+    });
+
+    return {
+      totalRecords,
+      completedRecords,
+      rejectedRecords,
+      rejectRate: totalRecords > 0
+        ? parseFloat(((rejectedRecords / totalRecords) * 100).toFixed(2))
+        : 0,
+      totalMissingCount,
+      totalDamagedCount,
+    };
   }
 
   async getInstruments(page: number = 1, pageSize: number = 20, search?: string) {

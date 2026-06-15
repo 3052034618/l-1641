@@ -104,14 +104,29 @@ export class WorkOrderService {
   private selectBestEngineer(engineers: User[], equipmentType?: SterilizerType): User | null {
     if (engineers.length === 0) return null;
 
-    const scoredEngineers = engineers.map((engineer) => {
+    let candidateEngineers = [...engineers];
+
+    if (equipmentType) {
+      const specializedEngineers = engineers.filter((engineer) =>
+        engineer.specializedEquipmentTypes?.includes(equipmentType)
+      );
+      if (specializedEngineers.length > 0) {
+        candidateEngineers = specializedEngineers;
+      }
+    }
+
+    const scoredEngineers = candidateEngineers.map((engineer) => {
       const openOrders = engineer.assignedWorkOrders.filter(
         (wo) => wo.status === WorkOrderStatus.OPEN || wo.status === WorkOrderStatus.ASSIGNED
       ).length;
 
+      const hasSpecialization = equipmentType
+        ? engineer.specializedEquipmentTypes?.includes(equipmentType)
+        : false;
+
       return {
         engineer,
-        score: -openOrders,
+        score: (hasSpecialization ? 1000 : 0) - openOrders,
       };
     });
 

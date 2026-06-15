@@ -2,7 +2,7 @@ import { Repository } from 'typeorm';
 import { CleaningTask, InstrumentPackage, Equipment } from '../entities';
 import { AppDataSource } from '../data-source';
 import { CreateCleaningTaskDto, StartCleaningTaskDto, CompleteCleaningTaskDto, CleaningParameters, ProgramConfig, UpdateCleaningTaskDto } from '../dtos/cleaning.dto';
-import { ContaminationLevel, CleaningProgram, PackageStatus, WorkOrderPriority } from '../enums';
+import { ContaminationLevel, CleaningProgram, PackageStatus, WorkOrderPriority, EquipmentStatus } from '../enums';
 import { NotFoundError, BadRequestError } from '../errors/CustomError';
 import { workOrderService } from './workorder.service';
 import { notificationService } from './notification.service';
@@ -230,9 +230,11 @@ export class CleaningService {
     const pkg = task.instrumentPackage!;
     const oldStatus = pkg.status;
 
+    let workOrderResult: any = null;
     if (parameterAnomalies.length > 0) {
       const workOrder = await this.createWorkOrderForAnomalies(task, parameterAnomalies);
       task.workOrderId = workOrder.id;
+      workOrderResult = workOrder;
     }
 
     pkg.status = PackageStatus.CLEANED;
@@ -260,6 +262,14 @@ export class CleaningService {
       task,
       parameterAnomalies,
       workOrderId: task.workOrderId,
+      workOrderCode: workOrderResult?.orderCode,
+      assignedEngineer: workOrderResult?.assignedEngineer
+        ? {
+            id: workOrderResult.assignedEngineer.id,
+            realName: workOrderResult.assignedEngineer.realName,
+            username: workOrderResult.assignedEngineer.username,
+          }
+        : null,
     };
   }
 
@@ -322,11 +332,16 @@ export class CleaningService {
       where: { id: equipmentId },
     });
     if (equipment) {
-      equipment.status = 'MAINTENANCE' as any;
-      await this.equipmentRepository.save(equipment);
+      equipment.status = EquipmentStatus.MAINTENANCE;
+      try {
+        await this.equipmentRepository.save(equipment);
+      } catch (e) {
+        logger.warn(`Failed to update equipment status: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
 
-    return workOrder;
+    const fullWorkOrder = await workOrderService.getById(workOrder.id);
+    return fullWorkOrder;
   }
 
   async getTaskById(id: string) {

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsArray, IsOptional, IsObject, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty, IsArray, IsOptional, IsObject, IsBoolean, IsNumber } from 'class-validator';
 import { ContaminationLevel } from '../enums';
 
 export interface InstrumentItem {
@@ -101,4 +101,50 @@ export class UpdatePackageDto {
   @IsString()
   @IsOptional()
   lockReason?: string;
+}
+
+export class CreateTemplateDto {
+  @IsString()
+  @IsNotEmpty()
+  code: string;
+
+  @IsString()
+  @IsNotEmpty()
+  name: string;
+
+  @IsNumber()
+  @IsOptional()
+  validDays?: number;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @IsArray()
+  @IsNotEmpty()
+  items: Array<{
+    instrumentId: string;
+    requiredQuantity: number;
+  }>;
+}
+
+export class UpdateTemplateDto {
+  @IsString()
+  @IsOptional()
+  name?: string;
+
+  @IsNumber()
+  @IsOptional()
+  validDays?: number;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @IsArray()
+  @IsOptional()
+  items?: Array<{
+    instrumentId: string;
+    requiredQuantity: number;
+  }>;
 }

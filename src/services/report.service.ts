@@ -85,7 +85,7 @@ export class ReportService {
     return report;
   }
 
-  private async calculateReportData(
+  async calculateReportData(
     startDate: Date,
     endDate: Date,
     zone?: string,
@@ -95,21 +95,31 @@ export class ReportService {
     const sterilizationStats = await this.calculateSterilizationStats(startDate, endDate);
     const equipmentStats = await this.calculateEquipmentStats(startDate, endDate);
 
-    const totalPackages = departmentStats.reduce((sum, d) => sum + d.totalPackages, 0);
-    const totalRecovery = departmentStats.reduce((sum, d) => sum + d.recoveredPackages, 0);
-    const totalSterilization = departmentStats.reduce((sum, d) => sum + d.sterilizedPackages, 0);
-    const totalDistribution = departmentStats.reduce((sum, d) => sum + d.distributedPackages, 0);
+    const totalPackages = departmentStats.reduce((sum, d) => sum + (d.totalPackages || 0), 0);
+    const totalRecovery = departmentStats.reduce((sum, d) => sum + (d.recoveredPackages || 0), 0);
+    const totalSterilization = departmentStats.reduce((sum, d) => sum + (d.sterilizedPackages || 0), 0);
+    const totalDistribution = departmentStats.reduce((sum, d) => sum + (d.distributedPackages || 0), 0);
     const overallTurnoverRate = departmentStats.length > 0
-      ? departmentStats.reduce((sum, d) => sum + d.turnoverRate, 0) / departmentStats.length
+      ? departmentStats.reduce((sum, d) => sum + (d.turnoverRate || 0), 0) / departmentStats.length
       : 0;
 
-    const totalExpired = await this.packageRepository.count({
-      where: { status: PackageStatus.EXPIRED },
-    });
+    let totalExpired = 0;
+    try {
+      totalExpired = await this.packageRepository.count({
+        where: { status: PackageStatus.EXPIRED },
+      });
+    } catch (e) {
+      logger.warn('Failed to count expired packages:', e);
+    }
 
-    const totalRejected = await this.recoveryRepository.count({
-      where: { isRejected: true, createdAt: Between(startDate, endDate) },
-    });
+    let totalRejected = 0;
+    try {
+      totalRejected = await this.recoveryRepository.count({
+        where: { isRejected: true, createdAt: Between(startDate, endDate) },
+      });
+    } catch (e) {
+      logger.warn('Failed to count rejected records:', e);
+    }
 
     const summary = {
       totalPackages,
@@ -119,14 +129,25 @@ export class ReportService {
       totalDistribution,
       totalExpired,
       totalRejected,
-      overallPassRate: sterilizationStats.passRate,
-      overallTurnoverRate: parseFloat(overallTurnoverRate.toFixed(2)),
+      overallPassRate: sterilizationStats?.passRate ?? 100,
+      overallTurnoverRate: parseFloat(overallTurnoverRate.toFixed(2)) || 0,
     };
 
     return {
-      departmentStats,
-      sterilizationStats,
-      equipmentStats,
+      departmentStats: departmentStats || [],
+      sterilizationStats: sterilizationStats || {
+        totalBatches: 0,
+        passedBatches: 0,
+        failedBatches: 0,
+        passRate: 100,
+        lockedBatches: 0,
+        averageDuration: 0,
+        averageTemperature: 0,
+        averagePressure: 0,
+        temperatureAnomalies: 0,
+        pressureAnomalies: 0,
+      },
+      equipmentStats: equipmentStats || [],
       summary,
     };
   }

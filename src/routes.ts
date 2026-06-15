@@ -61,6 +61,9 @@ router.put('/recovery/packages/:id', authenticate, authorizeRoles.disinfection, 
 router.get('/recovery/stats', authenticate, recoveryController.getRecoveryStats);
 router.get('/recovery/templates', authenticate, recoveryController.getTemplates);
 router.post('/recovery/templates', authenticate, authorizeRoles.manager, recoveryController.createTemplate);
+router.get('/recovery/templates/:id', authenticate, recoveryController.getTemplateById);
+router.put('/recovery/templates/:id', authenticate, authorizeRoles.manager, recoveryController.updateTemplate);
+router.delete('/recovery/templates/:id', authenticate, authorizeRoles.manager, recoveryController.deleteTemplate);
 
 router.post('/cleaning/tasks', authenticate, authorizeRoles.disinfection, cleaningController.createTask);
 router.put('/cleaning/tasks/:id/start', authenticate, authorizeRoles.disinfection, cleaningController.startTask);
@@ -71,14 +74,14 @@ router.get('/cleaning/programs', authenticate, cleaningController.getCleaningPro
 router.get('/cleaning/stats', authenticate, cleaningController.getCleaningStats);
 
 router.get('/workorders', authenticate, workOrderController.getWorkOrders);
-router.get('/workorders/:id', authenticate, workOrderController.getWorkOrderById);
+router.get('/workorders/stats', authenticate, workOrderController.getWorkOrderStats);
 router.post('/workorders', authenticate, authorizeRoles.manager, workOrderController.createWorkOrder);
+router.get('/workorders/:id', authenticate, workOrderController.getWorkOrderById);
 router.put('/workorders/:id', authenticate, workOrderController.updateWorkOrder);
 router.put('/workorders/:id/assign', authenticate, authorizeRoles.manager, workOrderController.assignEngineer);
 router.put('/workorders/:id/auto-assign', authenticate, authorizeRoles.manager, workOrderController.autoAssignEngineer);
 router.put('/workorders/:id/start', authenticate, workOrderController.startWorkOrder);
 router.put('/workorders/:id/complete', authenticate, workOrderController.completeWorkOrder);
-router.get('/workorders/stats', authenticate, workOrderController.getWorkOrderStats);
 router.delete('/workorders/:id', authenticate, authorizeRoles.manager, workOrderController.deleteWorkOrder);
 
 router.post('/sterilization/batches', authenticate, authorizeRoles.disinfection, sterilizationController.createBatch);
@@ -108,15 +111,15 @@ router.get('/distribution/stats', authenticate, distributionController.getStats)
 router.get('/distribution/ready', authenticate, distributionController.getReadyPackages);
 
 router.post('/reports', authenticate, authorizeRoles.manager, reportController.generateReport);
-router.get('/reports/:id', authenticate, reportController.getReportById);
-router.get('/reports', authenticate, reportController.getReports);
-router.get('/reports/export', authenticate, reportController.exportReport);
 router.get('/reports/stats', authenticate, reportController.getStats);
+router.get('/reports/export', authenticate, reportController.exportReport);
+router.get('/reports', authenticate, reportController.getReports);
+router.get('/reports/:id', authenticate, reportController.getReportById);
 
 router.get('/notifications', authenticate, notificationController.getNotifications);
 router.get('/notifications/unread', authenticate, notificationController.getUnreadCount);
-router.put('/notifications/:id/read', authenticate, notificationController.markAsRead);
 router.put('/notifications/read-all', authenticate, notificationController.markAllAsRead);
 router.get('/notifications/:id', authenticate, notificationController.getNotificationById);
+router.put('/notifications/:id/read', authenticate, notificationController.markAsRead);
 
 export default router;

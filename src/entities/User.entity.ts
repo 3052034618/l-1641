@@ -1,5 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
-import { UserRole } from '../enums';
+import { UserRole, SterilizerType } from '../enums';
 import { Department } from './Department.entity';
 import { WorkOrder } from './WorkOrder.entity';
 import { Notification } from './Notification.entity';
@@ -39,6 +39,9 @@ export class User {
 
   @Column({ default: true })
   isActive: boolean;
+
+  @Column('simple-array', { nullable: true })
+  specializedEquipmentTypes: SterilizerType[];
 
   @OneToMany(() => WorkOrder, workOrder => workOrder.assignedEngineer)
   assignedWorkOrders: WorkOrder[];

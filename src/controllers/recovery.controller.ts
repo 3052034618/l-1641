@@ -2,7 +2,7 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { recoveryService } from '../services/recovery.service';
 import { successResponse, paginatedResponse } from '../utils/response';
-import { CreatePackageDto, RecoveryInspectionDto, RejectPackageDto, UpdatePackageDto, ScanBarcodeDto } from '../dtos/recovery.dto';
+import { CreatePackageDto, RecoveryInspectionDto, RejectPackageDto, UpdatePackageDto, ScanBarcodeDto, CreateTemplateDto, UpdateTemplateDto } from '../dtos/recovery.dto';
 import { PackageStatus } from '../enums';
 
 export class RecoveryController {
@@ -149,6 +149,60 @@ export class RecoveryController {
 
       const result = await recoveryService.getTemplates(page, pageSize);
       return paginatedResponse(res, result.templates, page, pageSize, result.total);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getTemplateById(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const result = await recoveryService.getTemplateById(id);
+      return successResponse(res, result, 'Template retrieved successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async createTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const dto = req.body as CreateTemplateDto;
+      const result = await recoveryService.createTemplate(dto);
+      return successResponse(res, result, 'Template created successfully', 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const dto = req.body as UpdateTemplateDto;
+      const result = await recoveryService.updateTemplate(id, dto);
+      return successResponse(res, result, 'Template updated successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async deleteTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const result = await recoveryService.deleteTemplate(id);
+      return successResponse(res, result, 'Template deleted successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getRecoveryStats(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;
+      const endDate = req.query.endDate ? new Date(req.query.endDate as string) : undefined;
+      const departmentId = req.query.departmentId as string | undefined;
+
+      const result = await recoveryService.getRecoveryStats(startDate, endDate, departmentId);
+      return successResponse(res, result, 'Recovery stats retrieved');
     } catch (error) {
       next(error);
     }
